@@ -48,6 +48,12 @@ dns:
     #   microshift.example.com
     baseDomain: example.com
 etcd:
+    # Sets the runtime target for etcd
+    # Defaults to systemd, which runs etcd as a transient service
+    # enum:
+    #  systemd        Run etcd as a transient system service
+    #  podman-etcd    Run etcd as a pacemaker resource under the podman-etcd resource agent
+    serviceType: systemd
     # Set a memory limit on the etcd process; etcd will begin paging
     # memory when it gets to this value. 0 means no limit.
     memoryLimitMB: 0
@@ -107,15 +113,15 @@ ingress:
         # httpCaptureCookies specifies HTTP cookies that should be captured in
         # access logs.  If this field is empty, no cookies are captured.
         httpCaptureCookies:
-            - # matchType specifies the type of match to be performed on the cookie
-              # name.  Allowed values are "Exact" for an exact string match and
-              # "Prefix" for a string prefix match.  If "Exact" is specified, a name
-              # must be specified in the name field.  If "Prefix" is provided, a
-              # prefix must be specified in the namePrefix field.  For example,
-              # specifying matchType "Prefix" and namePrefix "foo" will capture a
-              # cookie named "foo" or "foobar" but not one named "bar".  The first
-              # matching cookie is captured.
-              matchType: ""
+            # matchType specifies the type of match to be performed on the cookie
+            # name.  Allowed values are "Exact" for an exact string match and
+            # "Prefix" for a string prefix match.  If "Exact" is specified, a name
+            # must be specified in the name field.  If "Prefix" is provided, a
+            # prefix must be specified in the namePrefix field.  For example,
+            # specifying matchType "Prefix" and namePrefix "foo" will capture a
+            # cookie named "foo" or "foobar" but not one named "bar".  The first
+            # matching cookie is captured.
+            - matchType: ""
               # maxLength specifies a maximum length of the string that will be
               # logged, which includes the cookie name, cookie value, and
               # one-character delimiter.  If the log entry exceeds this length, the
@@ -142,11 +148,11 @@ ingress:
 
             # If this field is empty, no request headers are captured.
             request:
-                - # maxLength specifies a maximum length for the header value.  If a
-                  # header value exceeds this length, the value will be truncated in the
-                  # log message.  Note that the ingress controller may impose a separate
-                  # bound on the total length of HTTP headers in a request.
-                  maxLength: 0
+                # maxLength specifies a maximum length for the header value.  If a
+                # header value exceeds this length, the value will be truncated in the
+                # log message.  Note that the ingress controller may impose a separate
+                # bound on the total length of HTTP headers in a request.
+                - maxLength: 0
                   # name specifies a header name.  Its value must be a valid HTTP header
                   # name as defined in RFC 2616 section 4.2.
                   name: ""
@@ -154,11 +160,11 @@ ingress:
 
             # If this field is empty, no response headers are captured.
             response:
-                - # maxLength specifies a maximum length for the header value.  If a
-                  # header value exceeds this length, the value will be truncated in the
-                  # log message.  Note that the ingress controller may impose a separate
-                  # bound on the total length of HTTP headers in a request.
-                  maxLength: 0
+                # maxLength specifies a maximum length for the header value.  If a
+                # header value exceeds this length, the value will be truncated in the
+                # log message.  Note that the ingress controller may impose a separate
+                # bound on the total length of HTTP headers in a request.
+                - maxLength: 0
                   # name specifies a header name.  Its value must be a valid HTTP header
                   # name as defined in RFC 2616 section 4.2.
                   name: ""
@@ -715,4 +721,3 @@ telemetry:
     proxy: ""
     # Telemetry status, which can be Enabled or Disabled. Defaults to Enabled.
     status: Enabled
-

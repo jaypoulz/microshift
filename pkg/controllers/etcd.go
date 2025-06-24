@@ -39,11 +39,13 @@ var (
 
 type EtcdService struct {
 	memoryLimit uint64
+	serviceType config.ServiceType
 }
 
 func NewEtcd(cfg *config.Config) *EtcdService {
 	return &EtcdService{
 		memoryLimit: cfg.Etcd.MemoryLimitMB,
+		serviceType: cfg.Etcd.ServiceType,
 	}
 }
 
@@ -118,6 +120,11 @@ func (s *EtcdService) Run(ctx context.Context, ready chan<- struct{}, stopped ch
 		klog.Infof("%v process quit: %v", s.Name(), cmd.ProcessState.String())
 
 		if !errors.Is(ctx.Err(), context.Canceled) {
+			if s.serviceType == config.ServiceTypePodmanEtcd {
+				klog.Info("microshift-etcd initializiation completed")
+				return
+			}
+
 			// Exit microshift to trigger microshift-etcd restart
 			klog.Warning("microshift-etcd process terminated prematurely, restarting MicroShift")
 			os.Exit(0)

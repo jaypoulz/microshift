@@ -38,6 +38,10 @@ import (
 )
 
 func initCerts(cfg *config.Config) (*certchains.CertificateChains, error) {
+	if cfg.Node.NodeIP == "" {
+		return nil, fmt.Errorf("Cannot initialize without node IP")
+	}
+
 	certChains, err := certSetup(cfg)
 	if err != nil {
 		return nil, err
@@ -324,7 +328,7 @@ func certSetup(cfg *config.Config) (*certchains.CertificateChains, error) {
 					ValidityDays: cryptomaterial.LongLivedCertificateValidityDays,
 				},
 				UserInfo:  &user.DefaultInfo{Name: "system:etcd-peer:etcd-client", Groups: []string{"system:etcd-peers"}},
-				Hostnames: []string{"localhost", cfg.Node.HostnameOverride},
+				Hostnames: []string{"localhost", cfg.Node.HostnameOverride, cfg.Node.NodeIP},
 			},
 			&certchains.PeerCertificateSigningRequestInfo{
 				CSRMeta: certchains.CSRMeta{
@@ -332,7 +336,7 @@ func certSetup(cfg *config.Config) (*certchains.CertificateChains, error) {
 					ValidityDays: cryptomaterial.LongLivedCertificateValidityDays,
 				},
 				UserInfo:  &user.DefaultInfo{Name: "system:etcd-server:etcd-client", Groups: []string{"system:etcd-servers"}},
-				Hostnames: []string{"localhost", cfg.Node.HostnameOverride},
+				Hostnames: []string{"localhost", cfg.Node.HostnameOverride, cfg.Node.NodeIP},
 			},
 		),
 	).WithCABundle(

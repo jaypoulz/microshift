@@ -156,6 +156,15 @@
           "description": "Set a memory limit on the etcd process; etcd will begin paging\nmemory when it gets to this value. 0 means no limit.",
           "type": "integer",
           "format": "int64"
+        },
+        "serviceType" : {
+          "description": "Set the runtime target for etcd. Defaults to systemd, which runs etcd as a transient service.",
+          "type": "string",
+          "default": "systemd",
+          "enum": [
+            "systemd",
+            "podman-etcd"
+          ]
         }
       }
     },

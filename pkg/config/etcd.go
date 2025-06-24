@@ -6,9 +6,20 @@ const (
 	// Etcd performance degrades significantly if the memory available
 	// is less than 128MB, enforce this minimum.
 	EtcdMinimumMemoryLimit = 128
+
+	ServiceTypeSystemD    ServiceType = "systemd"
+	ServiceTypePodmanEtcd ServiceType = "podman-etcd"
 )
 
+type ServiceType string
+
 type EtcdConfig struct {
+	// Set the service type for the etcd service
+	// This is used to turn on podman-etcd, which is a resource
+	// agent controlled via pacemaker that enables safe scaling
+	// of nodes added to the cluster
+	ServiceType ServiceType `json:"serviceType"`
+
 	// Set a memory limit on the etcd process; etcd will begin paging
 	// memory when it gets to this value. 0 means no limit.
 	MemoryLimitMB uint64 `json:"memoryLimitMB"`

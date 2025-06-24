@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,7 +34,7 @@ func NewRunEtcdCommand() *cobra.Command {
 				klog.Fatalf("Error in reading and validating MicroShift config: %v", err)
 			}
 
-			e := NewEtcd(cfg)
+			e := NewPodmanEtcd(cfg)
 			return e.Run()
 		},
 	}
@@ -44,17 +47,52 @@ type EtcdService struct {
 	minDefragBytes          int64
 	maxFragmentedPercentage float64
 	defragCheckFreq         time.Duration
+	serviceType             config.ServiceType
+}
+
+type PodmanEtcdService struct {
+	EtcdService
+	authfilePath      string
+	podManifestPath   string
+	nodeList          []Node
+}
+
+type Node struct {
+	name     string
+	ip       string
 }
 
 func NewEtcd(cfg *config.Config) *EtcdService {
 	s := &EtcdService{}
+	s.serviceType = config.ServiceTypeSystemD
+	klog.Infof("Reading user settings Etcd.ServiceType; found %q", cfg.Etcd.ServiceType)
 	s.configure(cfg)
+	return s
+}
+
+func NewPodmanEtcd(cfg *config.Config) *PodmanEtcdService {
+	base := NewEtcd(cfg)
+	s := &PodmanEtcdService{}
+	s.etcdCfg = base.etcdCfg
+	s.minDefragBytes = base.minDefragBytes
+	s.maxFragmentedPercentage = base.maxFragmentedPercentage
+	s.defragCheckFreq = base.defragCheckFreq
+	s.serviceType = base.serviceType
+
+	// TODO actually pipe this through config instead of hardcoding everything
+	s.authfilePath = AUTHFILE_PATH
+	s.podManifestPath = PODMAN_ETCD_JSON_PATH
+
+	// This is the a bad hardcoded sin since this node list needs to be dynamic
+	s.nodeList = []Node{Node{name: NODE_HOSTNAME, ip: cfg.Node.NodeIP}}
 	return s
 }
 
 func (s *EtcdService) Name() string { return "etcd" }
 
 func (s *EtcdService) configure(cfg *config.Config) {
+	klog.Infof("Found Etcd.ServiceType set to %v", cfg.Etcd.ServiceType)
+	s.serviceType = cfg.Etcd.ServiceType
 	s.minDefragBytes = cfg.Etcd.MinDefragBytes
 	s.maxFragmentedPercentage = cfg.Etcd.MaxFragmentedPercentage
 	s.defragCheckFreq = cfg.Etcd.DefragCheckFreq
@@ -97,7 +135,104 @@ func (s *EtcdService) configure(cfg *config.Config) {
 	s.etcdCfg.PeerTLSInfo.TrustedCAFile = etcdSignerCertPath
 }
 
-func (s *EtcdService) Run() error {
+const (
+	AUTHFILE_PATH = "/etc/crio/openshift-pull-secret"
+	PODMAN_ETCD_CERTS_DIR = "/etc/kubernetes/static-pod-resources/etcd-certs/secrets/etcd-all-certs"
+	PODMAN_ETCD_BUNDLES_DIR = "/etc/kubernetes/static-pod-resources/etcd-certs/configmaps/etcd-all-bundles"
+
+	// THESE ARE AWFUL HARDCODED VALUES
+	// We should be reading these in from the config
+	PODMAN_ETCD_JSON_PATH = "/etc/kubernetes/etcd-pod.json"
+	NODE_HOSTNAME = "localhost.localdomain"
+	REVISION_FILE_DIR = "/var/lib/etcd"
+	REVISION_JSON = `{"clusterId":1,"raftIndex":{},"maxRaftIndex":1,"created":""}`
+)
+
+func (s *PodmanEtcdService) configurePodmanEtcd() {
+	// HACK make a directory where we can hardlink all the certs
+	err := os.MkdirAll(PODMAN_ETCD_CERTS_DIR, os.ModePerm)
+	if err != nil {
+		klog.Fatalf("Error in creating podman-etcd cert directory: %v", err)
+		return
+	}
+
+	err = os.MkdirAll(PODMAN_ETCD_BUNDLES_DIR, os.ModePerm)
+	if err != nil {
+		klog.Fatalf("Error in creating podman-etcd bundles directory: %v", err)
+		return
+	}
+
+	hostname, err := os.Hostname()
+		if err != nil {
+		klog.Fatalf("Error in looking up node hostname: %v", err)
+		return
+	}
+
+	// HACK make a directory where we can inject a default revision
+	err = os.MkdirAll(REVISION_FILE_DIR, os.ModePerm)
+	if err != nil {
+		klog.Fatalf("Error in creating /var/lib/etcd/revision.json directory: %v", err)
+		return
+	}
+
+	// YUCK create a dummy revision.json
+	os.Remove(filepath.Join(REVISION_FILE_DIR, "revision.json"))
+	err = os.WriteFile(filepath.Join(REVISION_FILE_DIR, "revision.json"), []byte(REVISION_JSON), 0644)
+	if err != nil {
+		klog.Fatalf("Error writing revision file: %v\n", err)
+		return
+	}
+
+	// Hardlink ALL THE THINGS
+
+	// Omit these since we might not need them ATM
+	//podmanEtcdServingMetricsCert := fmt.Sprintf("etcd-serving-metrics-%s.crt", hostname)
+	//podmanEtcdServingMetricsKey := fmt.Sprintf("etcd-serving-metrics-%s.key", hostname)
+
+	microshiftServingCert := "/var/lib/microshift/certs/etcd-signer/etcd-serving/peer.crt"
+	podmanEtcdServingCert := filepath.Join(PODMAN_ETCD_CERTS_DIR, fmt.Sprintf("etcd-serving-%s.crt", hostname))
+
+	microshiftServingKey := "/var/lib/microshift/certs/etcd-signer/etcd-serving/peer.key"
+	podmanEtcdServingKey := filepath.Join(PODMAN_ETCD_CERTS_DIR, fmt.Sprintf("etcd-serving-%s.key", hostname))
+
+	microshiftPeerCert := "/var/lib/microshift/certs/etcd-signer/etcd-peer/peer.crt"
+	podmanEtcdPeerCert := filepath.Join(PODMAN_ETCD_CERTS_DIR, fmt.Sprintf("etcd-peer-%s.crt", hostname))
+
+	microshiftPeerKey := "/var/lib/microshift/certs/etcd-signer/etcd-peer/peer.key"
+	podmanEtcdPeerKey := filepath.Join(PODMAN_ETCD_CERTS_DIR, fmt.Sprintf("etcd-peer-%s.key", hostname))
+
+	microshiftCACert := "/var/lib/microshift/certs/etcd-signer/ca.crt"
+	podmanEtcdCACert := filepath.Join(PODMAN_ETCD_BUNDLES_DIR, "server-ca-bundle.crt")
+
+	copyFile(microshiftServingCert, podmanEtcdServingCert)
+	copyFile(microshiftServingKey, podmanEtcdServingKey)
+	copyFile(microshiftPeerCert, podmanEtcdPeerCert)
+	copyFile(microshiftPeerKey, podmanEtcdPeerKey)
+	copyFile(microshiftCACert, podmanEtcdCACert)
+}
+
+func copyFile(src string, dst string) {
+	// Remove the file if it exists, we don't care if there's an error
+	os.Remove(dst)
+	err := os.Link(src, dst)
+	if err != nil {
+		klog.Fatalf("Failed to copy file %s to %s; error: %v", src, dst, err)
+	}
+}
+
+func (s *PodmanEtcdService) Run() error {
+	klog.Warningf("Loading etcd service from %v", s.serviceType)
+
+	if s.serviceType == config.ServiceTypePodmanEtcd {
+		s.configurePodmanEtcd()
+		return s.RunPodmanEtcdService()
+	}
+
+	// We always default back to the vanilla behavior
+	return s.RunEtcdService()
+}
+
+func (s *EtcdService) RunEtcdService() error {
 	if os.Geteuid() > 0 {
 		klog.Fatalf("microshift-etcd must be run privileged")
 	}
@@ -134,6 +269,44 @@ func (s *EtcdService) Run() error {
 
 	// Shutdown the defrag controller.
 	defragShutdown()
+
+	return nil
+}
+
+func (s *PodmanEtcdService) RunPodmanEtcdService() error {
+
+	// Check if the resource already exists
+	cmd := exec.Command("/usr/sbin/pcs", "resource", "status")
+	output, err := cmd.Output()
+	if err != nil {
+		klog.Error(err, "Failed to get pcs resource status", "stdout", output, "err", err)
+		return err
+	}
+
+	// This one brings shame upon my family
+	// Ensure the hardcoded yaml file is loaded
+	_, err = os.Stat(s.podManifestPath)
+	if os.IsNotExist(err) {
+		klog.Fatalf("Cannot initialize podman-etcd; File %q does not exist.\n", s.podManifestPath)
+		return err
+	} else if err != nil {
+		klog.Fatalf("Cannot initialize podman-etcd; An error occurred while checking file %q: %v\n", s.podManifestPath, err)
+		return err
+	}
+
+	if !strings.Contains(string(output), "etcd") {
+		klog.Info("Creating etcd resource")
+		args := strings.Fields(fmt.Sprintf("/usr/sbin/pcs resource create etcd ocf:heartbeat:podman-etcd node_ip_map=\"%s:%s\" nic=enp1s0 pod_manifest=%s authfile=%s drop_in_dependency=true clone interleave=true notify=true --debug", s.nodeList[0].name, s.nodeList[0].ip, s.podManifestPath, s.authfilePath))
+		cmd = exec.Command(args[0], args[1:]...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		output, err := cmd.Output()
+		if err != nil {
+			klog.Error(err, "Failed to create etcd resource", "\n  command: ", cmd.Args, "\n  output: ", output, "\n  err: ", string(err.(*exec.ExitError).Stderr))
+			return err
+		}
+		klog.Info("Successfully created etcd resource", "\n  command: ", cmd.Args, "\n  output: ", string(output), "\n  stderr: ", stderr.String())
+	}
 
 	return nil
 }

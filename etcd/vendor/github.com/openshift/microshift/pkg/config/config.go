@@ -128,6 +128,7 @@ func (c *Config) fillDefaults() error {
 	}
 	c.Etcd = EtcdConfig{
 		MemoryLimitMB:           0,
+		ServiceType:             ServiceTypeSystemD,
 		QuotaBackendBytes:       8 * 1024 * 1024 * 1024,
 		MinDefragBytes:          100 * 1024 * 1024,
 		MaxFragmentedPercentage: 45,
@@ -228,6 +229,10 @@ func (c *Config) incorporateUserSettings(u *Config) {
 
 	if u.Etcd.MemoryLimitMB != 0 {
 		c.Etcd.MemoryLimitMB = u.Etcd.MemoryLimitMB
+	}
+
+	if u.Etcd.ServiceType != "" {
+		c.Etcd.ServiceType = u.Etcd.ServiceType
 	}
 
 	if u.Node.HostnameOverride != "" {
@@ -568,6 +573,10 @@ func (c *Config) validate() error {
 		) {
 			return fmt.Errorf("subjectAltNames must not contain apiserver advertise address IPs")
 		}
+	}
+
+	if !(c.Etcd.ServiceType == ServiceTypePodmanEtcd || c.Etcd.ServiceType == ServiceTypeSystemD) {
+		return fmt.Errorf("etcd.serviceType is set to unknown value %q", c.Etcd.ServiceType)
 	}
 
 	if c.Etcd.MemoryLimitMB > 0 && c.Etcd.MemoryLimitMB < EtcdMinimumMemoryLimit {
